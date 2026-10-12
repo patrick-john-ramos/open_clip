@@ -52,6 +52,7 @@ def pipeline(request, tmp_path, monkeypatch):
     args.train_num_samples, args.val_num_samples = 5, None
     args.workers, args.world_size, args.batch_size = 0, 1, 2
     args.audio_ext = "wav"
+    args.no_allowlist = True
     return partial(
         builders[request.param], args, _transform_audio if audio else ToTensor(), tokenizer=VariableTokenizer(),
     )

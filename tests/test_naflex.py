@@ -506,6 +506,7 @@ def test_get_wds_dataset_naflex_keeps_dictionary_contract(tmp_path):
         rank=0,
         world_size=1,
         text_attention_mask=True,
+        no_allowlist=True,
     )
     tokenizer = _MaskTokenizer()
 
@@ -549,6 +550,7 @@ def test_get_wds_dataset_naflex_rolls_over_non_resampled_input(tmp_path):
         distributed=False,
         rank=0,
         world_size=1,
+        no_allowlist=True,
     )
     tokenizer = lambda text: [torch.tensor([int(text.strip())], dtype=torch.long)]
 

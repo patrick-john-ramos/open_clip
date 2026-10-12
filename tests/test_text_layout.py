@@ -56,6 +56,7 @@ def _loader_setup(kind, loader_inputs):
     args.train_num_samples = args.val_num_samples = len(captions)
     args.text_attention_mask = False
     args.audio_ext = "wav"
+    args.no_allowlist = True
     if "audio" in kind:
         transform, traits = _AudioTransform(), CLAP_TRAITS
     else:

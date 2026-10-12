@@ -14,7 +14,7 @@ authors = [
 ]
 description = "Open reproduction of consastive language-image pretraining (CLIP) and related."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 keywords = ["pytorch", "clip", "image-text", "language-image", "multimodal"]
 license = {text = "MIT"}
 classifiers = [
@@ -33,14 +33,19 @@ classifiers = [
         'Topic :: Software Development :: Libraries :: Python Modules',
 ]
 dependencies = [
-    'torch>=2.6',
-    'torchvision',
-    'regex',
-    'ftfy',
-    'tqdm',
-    'huggingface-hub',
-    'safetensors',
-    'timm>=1.0.29',
+    "torch>=2.6",
+    "torchvision",
+    "regex",
+    "ftfy",
+    "tqdm",
+    "huggingface-hub",
+    "safetensors",
+    "timm>=1.0.29",
+    "webdataset>=0.2.5,<=0.2.86",
+    "pandas>=2.3.3",
+    "braceexpand>=0.1.7",
+    "transformers[sentencepiece]>=5.19.0",
+    "fsspec>=2026.7.0",
 ]
 dynamic = ["version"]
 

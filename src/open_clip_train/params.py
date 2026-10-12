@@ -952,8 +952,37 @@ def parse_args(args):
              "batch-max. Use M (for example 16 or 32) to bound the number of distinct text sequence lengths and "
              "limit torch.compile recompiles (the token-axis analogue of --naflex-pad-multiple)."
     )
+    parser.add_argument(
+        "--allowlist",
+        type=str,
+        default=None,
+        help="Path to a NumPy .npz archive containing a one-dimensional string array named 'ids', with each entry "
+             "formatted as 'shard_basename.tar/sample_key'. When set, only samples whose complete identifier is in "
+             "the allowlist are kept. Mutually exclusive with --no-allowlist; exactly one must be supplied for "
+             "WebDataset training."
+    )
+    parser.add_argument(
+        "--no-allowlist",
+        default=False,
+        action="store_true",
+        help="Disable allowlist filtering entirely (the historical behavior). Mutually exclusive with "
+             "--allowlist; exactly one must be supplied for WebDataset training."
+    )
 
     args = parser.parse_args(args)
+
+    # Allowlist mode is opt-in/opt-out. Exactly one of --allowlist / --no-allowlist must be supplied for
+    # WebDataset training, but the "neither supplied" case is NOT rejected here: parse_args() is also called by
+    # utilities and tests that build non-training args (e.g. parse_args([]) in test_params.py). Enforcing the
+    # mutual-exclusivity and nonempty-path rules here is safe for those callers (both values are at their
+    # defaults when unset); the "exactly one must be supplied" rule is enforced later, at the narrowest point
+    # before the training dataset is constructed (see data.get_wds_dataset). See the implementation report.
+    if args.allowlist is not None and args.no_allowlist:
+        raise ValueError(
+            "--allowlist and --no-allowlist are mutually exclusive; supply exactly one of them."
+        )
+    if args.allowlist is not None and not args.allowlist:
+        raise ValueError("--allowlist requires a nonempty path string.")
 
     # Guard here (not just in NaFlexBatchScheduler) so the collate-only variable-text paths that bypass the
     # scheduler (standard CLAP / synthetic / plain CLIP) also reject non-positive values.

@@ -3,6 +3,7 @@ import io
 import json
 import logging
 import math
+from urllib.parse import urlparse
 
 _logger = logging.getLogger(__name__)
 import os
@@ -263,6 +264,102 @@ def get_dataset_size(shards):
     return total_size, num_shards
 
 
+def load_allowlist(allowlist_path):
+    """Load a subset allowlist from a NumPy ``.npz`` archive into a ``set`` of strings.
+
+    The archive must contain a one-dimensional array of strings named ``ids``; each entry is a complete sample
+    identifier of the form ``shard_basename.tar/sample_key`` (the full tar basename, including the ``.tar``
+    extension, joined to the sample key with a single forward slash). Filtering is disabled by passing
+    ``None`` for ``allowlist_path``.
+
+    Returns a Python ``set`` of the identifiers. Raises a clear error for missing, unreadable, or malformed
+    archives, for an archive missing the ``ids`` array, for a non-one-dimensional or non-string array, or for an
+    empty allowlist. The archive is loaded once per dataset construction (this function is not called per
+    sample or per worker).
+    """
+    if allowlist_path is None:
+        return None
+    try:
+        with np.load(allowlist_path, allow_pickle=False) as archive:
+            if 'ids' not in archive.files:
+                raise ValueError(
+                    f"Allowlist archive {allowlist_path!r} is missing the expected 'ids' array; "
+                    f"found keys: {archive.files!r}."
+                )
+            ids = archive['ids']
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"Allowlist file not found: {allowlist_path!r}. Check the path or pass --no-allowlist to disable "
+            f"allowlist filtering."
+        )
+    except (OSError, ValueError) as exn:
+        # Covers unreadable files, corrupt archives, and the malformed-array errors raised below (ValueError is
+        # also raised by np.load for object arrays even with allow_pickle=False).
+        raise ValueError(
+            f"Could not load allowlist archive {allowlist_path!r}: {exn}. Expected a .npz file containing a "
+            f"one-dimensional string array named 'ids'."
+        ) from exn
+
+    if not isinstance(ids, np.ndarray):
+        raise ValueError(
+            f"Allowlist archive {allowlist_path!r} does not contain a NumPy array under 'ids'; got "
+            f"{type(ids).__name__}."
+        )
+    if ids.ndim != 1:
+        raise ValueError(
+            f"Allowlist 'ids' array must be one-dimensional, got {ids.ndim}-dimensional array of shape "
+            f"{ids.shape!r}."
+        )
+    if ids.dtype.kind not in ('U', 'S', 'O'):
+        raise ValueError(
+            f"Allowlist 'ids' array must contain strings, got dtype {ids.dtype!r}."
+        )
+    if ids.dtype.kind == 'O':
+        # Object arrays are ambiguous and cannot be loaded with allow_pickle=False in the first place; this
+        # branch is a defensive fallback for in-memory arrays.
+        raise ValueError(
+            f"Allowlist 'ids' array has unsupported object dtype; save it as a string array "
+            f"(e.g. np.savez(path, ids=np.array([...], dtype=str)))."
+        )
+
+    allowlist = set()
+    for identifier in ids.tolist():
+        if isinstance(identifier, bytes):
+            identifier = identifier.decode('utf-8')
+        allowlist.add(str(identifier))
+    if not allowlist:
+        raise ValueError(
+            f"Allowlist {allowlist_path!r} contains no valid identifiers. Check the .npz file, or pass "
+            f"--no-allowlist to disable allowlist filtering intentionally."
+        )
+    return allowlist
+
+
+def _resolve_train_allowlist(args):
+    """Resolve the training allowlist from CLI args.
+
+    Returns a ``set`` of identifiers when filtering is enabled, or ``None`` when filtering is disabled
+    (``--no-allowlist``). Raises if filtering is enabled but neither argument is supplied, or if the allowlist
+    cannot be loaded.
+    """
+    allowlist_path = getattr(args, 'allowlist', None)
+    no_allowlist = getattr(args, 'no_allowlist', False)
+    if no_allowlist:
+        if allowlist_path is not None:
+            raise ValueError(
+                "--allowlist and --no-allowlist are mutually exclusive; supply exactly one of them."
+            )
+        return None
+    if allowlist_path is None:
+        raise ValueError(
+            "Allowlist filtering is not configured: supply --allowlist PATH to a .npz archive of sample "
+            "identifiers, or --no-allowlist to disable filtering and use the full dataset."
+        )
+    if not allowlist_path:
+        raise ValueError("--allowlist requires a nonempty path string.")
+    return load_allowlist(allowlist_path)
+
+
 def get_imagenet(args, preprocess_fns, split, naflex_data_config=None):
     assert split in ["train", "val", "v2"]
     is_train = split == "train"
@@ -356,6 +453,11 @@ class FilterValidSample:
       - ``json_text_key`` set  -> require a ``.json`` member (caption read from a field of it).
       - otherwise              -> require one of the ``text_key`` member suffixes (``;``-separated alternatives).
     ``image_key`` accepts the same ``;``-separated member suffix alternatives for the image.
+
+    Optional ``allowlist`` (a ``set`` of complete sample identifiers, or ``None`` to disable) restricts the
+    filter to samples whose ``shard_basename.tar/sample_key`` identifier is present. The check runs before the
+    image/caption validity checks so an allowlisted sample that happens to lack an image or caption still fails
+    the existing validation (the allowlist only narrows which samples are *considered*).
     """
 
     def __init__(
@@ -363,17 +465,56 @@ class FilterValidSample:
             text_key: str = "txt",
             json_text_key: Optional[str] = None,
             image_key: str = DEFAULT_IMAGE_KEY,
+            allowlist: Optional[set] = None,
     ):
         self.json_text_key = json_text_key
         self.image_keys = _split_wds_keys(image_key)
         self.text_keys = None if json_text_key else _split_wds_keys(text_key)
+        self.allowlist = allowlist
 
     def __call__(self, sample):
+        if self.allowlist is not None:
+            if not _sample_in_allowlist(sample, self.allowlist):
+                return False
         if not any(key in sample for key in self.image_keys):  # image_keys pre-split in __init__
             return False
         if self.json_text_key is not None:
             return 'json' in sample
         return any(key in sample for key in self.text_keys)
+
+
+def _shard_basename(url):
+    """Normalize a shard URL/path to its basename, preserving the full ``.tar`` extension.
+
+    For URL-style paths the URL path is parsed first (via urllib) so query strings and fragments cannot become
+    part of the shard name; for ordinary local filesystem paths ``os.path.basename`` is used directly. Both
+    forms preserve the ``.tar`` suffix exactly as spelled.
+    """
+    if not isinstance(url, str):
+        raise TypeError(
+            f"Cannot extract shard basename from non-string __url__ value: {url!r}."
+        )
+    parsed = urlparse(url)
+    if parsed.scheme and parsed.netloc:
+        # URL-style path: use the path component only, dropping query/fragment.
+        path = parsed.path
+    else:
+        # Local filesystem path (may be a bare path or a file:// URL without a netloc).
+        path = url
+    return os.path.basename(path)
+
+
+def _sample_in_allowlist(sample, allowlist):
+    """Return True iff ``sample``'s normalized ``shard_basename.tar/sample_key`` identifier is in ``allowlist``.
+
+    The identifier is formed from ``sample['__url__']`` and ``sample['__key__']`` without modifying either value.
+    """
+    url = sample.get('__url__')
+    key = sample.get('__key__')
+    if url is None or key is None:
+        return False
+    identifier = _shard_basename(url) + '/' + str(key)
+    return identifier in allowlist
 
 
 def _pad_caption_weights(weights, n):
@@ -859,6 +1000,20 @@ def get_wds_dataset(
     use_naflex_train = naflex_data_config is not None and is_train
     use_naflex_eval = naflex_data_config is not None and not is_train
 
+    # Allowlist filtering applies to the training set only; validation data is unaffected unless explicitly
+    # configured otherwise (there is no allowlist argument for validation here). The allowlist is loaded once,
+    # per dataset construction, before the pipeline is assembled.
+    allowlist = None
+    if is_train:
+        allowlist = _resolve_train_allowlist(args)
+        if allowlist is not None and resampled:
+            raise ValueError(
+                "Allowlist filtering is not supported with --dataset-resampled: shards are sampled with "
+                "replacement and filtered afterwards, which can produce shards with few or no usable samples and "
+                "distorts the intended sample distribution. Use non-resampled training "
+                "(omit --dataset-resampled) with the allowlist, or pass --no-allowlist to disable filtering."
+            )
+
     num_image_tokens = naflex_data_config.train_num_image_tokens if use_naflex_train else None
     num_samples, num_shards = get_wds_sizes(args, input_shards, is_train, num_tokens=num_image_tokens)
     shared_epoch = SharedEpoch(epoch=epoch)
@@ -897,7 +1052,9 @@ def get_wds_dataset(
     if json_text_key:
         # Read the caption from a field of each sample's .json (datasets without a text member, e.g. monet).
         pipeline.extend([
-            wds.select(FilterValidSample(json_text_key=json_text_key, image_key=image_key)),
+            wds.select(FilterValidSample(
+                json_text_key=json_text_key, image_key=image_key, allowlist=allowlist,
+            )),
             wds.rename(image=image_key, text="json", keep=False),
             wds.map_dict(
                 text=JsonCaptionExtractor(json_text_key, sample_probs=getattr(args, 'json_text_key_probs', None)),
@@ -909,7 +1066,9 @@ def get_wds_dataset(
         # Read the caption from a tar member (default 'txt'; --text-key allows alternatives like 'txt;caption').
         # Plain-text members only (TokenizeText utf-8 decodes the raw bytes); json captions use --json-text-key.
         pipeline.extend([
-            wds.select(FilterValidSample(text_key=text_key, image_key=image_key)),
+            wds.select(FilterValidSample(
+                text_key=text_key, image_key=image_key, allowlist=allowlist,
+            )),
             wds.rename(image=image_key, text=text_key, keep=False),
             wds.select(FilterNonEmptyText()),
         ])

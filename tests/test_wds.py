@@ -67,6 +67,7 @@ def build_params(input_shards, seed=0):
     args.workers = 0
     args.world_size = 1
     args.batch_size = 1
+    args.no_allowlist = True
     random_seed(seed)
 
     preprocess_img = transforms.ToTensor()
