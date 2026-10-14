@@ -280,6 +280,7 @@ def load_allowlist(allowlist_path):
     if allowlist_path is None:
         return None
     try:
+        _logger.info('DEBUG: Loading allowlist')
         with np.load(allowlist_path, allow_pickle=False) as archive:
             if 'ids' not in archive.files:
                 raise ValueError(
@@ -287,6 +288,7 @@ def load_allowlist(allowlist_path):
                     f"found keys: {archive.files!r}."
                 )
             ids = archive['ids']
+        _logger.info('DEBUG: Loaded allowlist')
     except FileNotFoundError:
         raise FileNotFoundError(
             f"Allowlist file not found: {allowlist_path!r}. Check the path or pass --no-allowlist to disable "
@@ -322,11 +324,14 @@ def load_allowlist(allowlist_path):
             f"(e.g. np.savez(path, ids=np.array([...], dtype=str)))."
         )
 
-    allowlist = set()
-    for identifier in ids.tolist():
-        if isinstance(identifier, bytes):
-            identifier = identifier.decode('utf-8')
-        allowlist.add(str(identifier))
+    _logger.info('DEBUG: Converting allowlist to set')
+    allowlist = set(ids)
+    # allowlist = set()
+    # for identifier in ids.tolist():
+    #     if isinstance(identifier, bytes):
+    #         identifier = identifier.decode('utf-8')
+    #     allowlist.add(str(identifier))
+    _logger.info('DEBUG: Convereted allowlist to set')
     if not allowlist:
         raise ValueError(
             f"Allowlist {allowlist_path!r} contains no valid identifiers. Check the .npz file, or pass "
