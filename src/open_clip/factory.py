@@ -1191,6 +1191,15 @@ def create_task(args, model, dist_model=None, naflex_data_config=None):
         )
     elif task_cls is SigLIPTask:
         options.update(dist_impl=args.loss_dist_impl, chunk_size=getattr(args, 'siglip_chunk_size', 0))
+    # DreamLIP sub-caption sampling is only valid for plain CLIP training (SigLIP subclasses CLIPTask but
+    # uses a different loss that cannot consume a (B, K, L) text tensor).
+    num_subcaptions = getattr(args, 'num_subcaptions', 0)
+    if num_subcaptions > 0:
+        if task_cls is not CLIPTask:
+            raise ValueError(
+                f"--num-subcaptions is only supported for plain CLIP training, not {task_cls.__name__}."
+            )
+        options['num_subcaptions'] = num_subcaptions
     task = (task_cls(model, dist_model, **options) if task_cls is DistillCLIPTask
             else task_cls(model, **options))
     if naflex_data_config is not None:

@@ -230,6 +230,30 @@ def parse_args(args):
              "trailing keys default to 0 (fallback only). Need not sum to 1."
     )
     parser.add_argument(
+        "--num-subcaptions",
+        type=int,
+        default=0,
+        help="DreamLIP sub-caption sampling: draw K sub-captions per image at every iteration and average "
+             "K independent CLIP losses sharing the image features (Zheng et al., 2024, Sec. 3.3). "
+             "0 = off (stock CLIP). Train WebDataset only; incompatible with NaFlex, variable text, "
+             "text attention masks, length bucketing, SigLIP, distillation, --accum-freq > 1 and "
+             "--json-text-key."
+    )
+    parser.add_argument(
+        "--subcaption-long-key",
+        type=str,
+        default='longsv_captions',
+        help="Tar member holding the long caption used to build the sub-caption pool (default 'longsv_captions'). "
+             "Only read when --num-subcaptions > 0."
+    )
+    parser.add_argument(
+        "--subcaption-short-key",
+        type=str,
+        default='shortsv_captions',
+        help="Tar member holding the short caption used to build the sub-caption pool "
+             "(default 'shortsv_captions'). Only read when --num-subcaptions > 0."
+    )
+    parser.add_argument(
         "--imagenet-val",
         type=str,
         default=None,
@@ -1000,6 +1024,27 @@ def parse_args(args):
         raise ValueError(f"--caption-loss-chunk-size must be > 0, got {args.caption_loss_chunk_size}.")
     if args.siglip_chunk_size < 0:
         raise ValueError(f"--siglip-chunk-size must be >= 0 (0 disables), got {args.siglip_chunk_size}.")
+
+    # DreamLIP sub-caption sampling: K>=1 turns on the sub-caption pipeline, which is only valid for plain
+    # fixed-length CLIP training. Model-dependent conflicts (variable text, text masks, bucketing) are
+    # caught again in get_wds_dataset; non-CLIP tasks are caught in create_task. Cached gradient accumulation
+    # calls task.trainable_module(**batch) directly in train.py and would break on a (B, K, L) text tensor.
+    if args.num_subcaptions < 0:
+        raise ValueError(f"--num-subcaptions must be >= 0, got {args.num_subcaptions}.")
+    if args.num_subcaptions > 0:
+        if args.accum_freq > 1:
+            raise ValueError(
+                "--num-subcaptions is not supported with --accum-freq > 1: cached gradient accumulation "
+                "calls the model directly with a (B, K, L) text tensor, which it cannot consume."
+            )
+        if args.siglip:
+            raise ValueError("--num-subcaptions is not supported with --siglip.")
+        if getattr(args, 'distill', False) or getattr(args, 'distill_model', None) is not None:
+            raise ValueError("--num-subcaptions is not supported with distillation.")
+        if args.use_naflex:
+            raise ValueError("--num-subcaptions is not supported with --use-naflex.")
+        if args.json_text_key:
+            raise ValueError("--num-subcaptions is not supported with --json-text-key.")
 
     # Model-family effects (NaFlex data implied by GenLIP / GenLAP / NaFlexCLAP, grad-accum guards, the text-mask
     # default) are applied after model creation by apply_model_traits(): the built model's traits decide, not

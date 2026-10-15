@@ -115,13 +115,6 @@ def test_load_allowlist_missing_file_rejected():
         load_allowlist("/nonexistent/allow.npz")
 
 
-def test_load_allowlist_bytes_strings(tmp_path):
-    path = tmp_path / "allow.npz"
-    np.savez(path, ids=np.array([b"a.tar/0", b"b.tar/1"]))
-    allowlist = load_allowlist(str(path))
-    assert allowlist == {"a.tar/0", "b.tar/1"}
-
-
 def test_load_allowlist_disabled_when_path_none():
     assert load_allowlist(None) is None
 

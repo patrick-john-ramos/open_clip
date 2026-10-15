@@ -55,6 +55,10 @@ class TokenizeText:
     def __call__(self, text):
         # Bucketed pipelines tokenize before `wds.decode` runs (the bucket pool holds raw, undecoded samples),
         # so the caption may arrive as raw utf-8 bytes rather than a decoded str.
+        if isinstance(text, (list, tuple)):
+            # DreamLIP sub-captions: (K, context_length). The variable-text path is rejected below, so
+            # it never sees lists; bytes members are decoded per item.
+            return self.tokenizer([t.decode('utf-8') if isinstance(t, bytes) else t for t in text])
         if isinstance(text, bytes):
             text = text.decode('utf-8')
         # `variable=True` returns a per-sample 1-D tensor (no fixed-length padding); collators pad captions
@@ -106,6 +110,7 @@ from open_clip_train.naflex_data import (
     create_naflex_eval_transform,
     require_naflex,
 )
+from open_clip_train.subcaptions import SampleSubcaptions
 
 
 def resolve_text_layout(args, model_traits):
@@ -326,12 +331,6 @@ def load_allowlist(allowlist_path):
 
     _logger.info('DEBUG: Converting allowlist to set')
     allowlist = set(ids)
-    # allowlist = set()
-    # for identifier in ids.tolist():
-    #     if isinstance(identifier, bytes):
-    #         identifier = identifier.decode('utf-8')
-    #     allowlist.add(str(identifier))
-    _logger.info('DEBUG: Convereted allowlist to set')
     if not allowlist:
         raise ValueError(
             f"Allowlist {allowlist_path!r} contains no valid identifiers. Check the .npz file, or pass "
@@ -1046,6 +1045,14 @@ def get_wds_dataset(
     # Length bucketing reorders by caption length (train-only; only meaningful for variable text).
     use_bucketing = is_train and variable_text and getattr(args, 'length_bucketing', False)
 
+    # DreamLIP sub-caption sampling: train-only, fixed-length CLIP towers only.
+    num_subcaptions = getattr(args, 'num_subcaptions', 0) if is_train else 0
+    if num_subcaptions > 0 and (use_naflex_train or variable_text or output_text_mask or use_bucketing):
+        raise ValueError(
+            "--num-subcaptions is not supported with NaFlex, variable-text towers, text attention masks "
+            "or length bucketing."
+        )
+
     # Image decode runs *after* tokenize and the optional length bucketer (see decode_pil_rgb below): the
     # bucketer pools `--bucket-pool` complete samples per worker, so it must see raw, undecoded samples (the
     # same regime as the raw-sample shuffle above) -- a pool of decoded full-resolution images is 10-50x
@@ -1054,7 +1061,20 @@ def get_wds_dataset(
     image_key = getattr(args, 'image_key', DEFAULT_IMAGE_KEY) or DEFAULT_IMAGE_KEY
     text_key = getattr(args, 'text_key', 'txt') or 'txt'
     json_text_key = getattr(args, 'json_text_key', None)
-    if json_text_key:
+    if num_subcaptions > 0:
+        # Sub-caption sampling: keep every caption member until the sampler has run. The sampler drops
+        # samples with an empty pool, so FilterNonEmptyText (which expects a string) is not used here.
+        pipeline.extend([
+            wds.select(FilterValidSample(
+                text_key=args.subcaption_long_key, image_key=image_key, allowlist=allowlist,
+            )),
+            map_no_key(
+                SampleSubcaptions(num_subcaptions, args.subcaption_long_key, args.subcaption_short_key),
+                handler=log_and_continue,
+            ),
+            wds.rename(image=image_key, text="text", keep=False),
+        ])
+    elif json_text_key:
         # Read the caption from a field of each sample's .json (datasets without a text member, e.g. monet).
         pipeline.extend([
             wds.select(FilterValidSample(
