@@ -353,7 +353,7 @@ def train_one_epoch(state: TrainState, data, args, tb_writer=None):
     # stays continuous across epochs); the EMA decays by the sample delta between metric logs.
     prev_metric_samples = state.samples_seen
     for i, batch in enumerate(dataloader):
-        _logger.info("DEBUG: first batch received")
+        # _logger.info("DEBUG: first batch received")
         i_accum = i // args.accum_freq
         step = num_batches_per_epoch * epoch + i_accum
 

@@ -285,7 +285,7 @@ def load_allowlist(allowlist_path):
     if allowlist_path is None:
         return None
     try:
-        _logger.info('DEBUG: Loading allowlist')
+        # _logger.info('DEBUG: Loading allowlist')
         with np.load(allowlist_path, allow_pickle=False) as archive:
             if 'ids' not in archive.files:
                 raise ValueError(
@@ -293,7 +293,7 @@ def load_allowlist(allowlist_path):
                     f"found keys: {archive.files!r}."
                 )
             ids = archive['ids']
-        _logger.info('DEBUG: Loaded allowlist')
+        # _logger.info('DEBUG: Loaded allowlist')
     except FileNotFoundError:
         raise FileNotFoundError(
             f"Allowlist file not found: {allowlist_path!r}. Check the path or pass --no-allowlist to disable "
@@ -329,7 +329,7 @@ def load_allowlist(allowlist_path):
             f"(e.g. np.savez(path, ids=np.array([...], dtype=str)))."
         )
 
-    _logger.info('DEBUG: Converting allowlist to set')
+    # _logger.info('DEBUG: Converting allowlist to set')
     allowlist = set(ids)
     if not allowlist:
         raise ValueError(

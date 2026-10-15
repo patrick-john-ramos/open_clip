@@ -510,7 +510,7 @@ def main(args):
     # model's text_cfg.context_length. This single value also feeds the total-token batch budget (in data.py).
     text_context_length = getattr(args, 'naflex_max_text_tokens', None) or args.force_context_length
     tokenizer = get_tokenizer(args.model, cache_dir=args.cache_dir, context_length=text_context_length)
-    _logger.info("DEBUG: before training data creation")
+    # _logger.info("DEBUG: before training data creation")
     data = get_data(
         args,
         (preprocess_train, preprocess_val),
@@ -519,7 +519,7 @@ def main(args):
         naflex_data_config=getattr(task, 'naflex_data_config', None),
         model_traits=model_traits,
     )
-    _logger.info("DEBUG: after training data creation")
+    # _logger.info("DEBUG: after training data creation")
     if args.audio_zeroshot_dataset:
         from open_clip_train.audio_zero_shot import (
             AudioZeroShotData,
